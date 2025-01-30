@@ -1,64 +1,91 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from repository.AgnetRepository import AgentFactory
+from models.models import ResponseModel, RequestModel
+from datetime import datetime
+from repository.AgnetRepository import AgentFactory
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Test API",
-    description="A simple API for testing FastAPI functionality",
+    description="A simple API.",
     version="1.0.0"
+     )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this to restrict access if needed
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Pydantic model for request body
-class Item(BaseModel):
-    name: str
-    description: Optional[str] = None
-    price: float
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+@app.post("/request", response_model=ResponseModel)
+async def create_request(request: RequestModel) -> ResponseModel:
+    try:
+        # Get or create agent instance
+        agent = AgentFactory.get_agent(username=request.username)
+        
 
-# Store items in memory (for demo purposes)
-items = {}
+        logging.info(f"This is a debug message {request}")
+         
 
-# Root endpoint
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Test API"}
 
-# GET all items
-@app.get("/items")
-async def get_items():
-    return items
+        # Update needs
+        needs_update = {
+            'competence': request.competence,
+            'certainty': request.certainty,
+            'affiliation': request.affiliation
+        }
+        logging.info(f"Before update_needs: {agent.needs}")
+        agent.update_needs(needs_update)
+        logging.info(f"After update_needs: {agent.needs}")
 
-# GET item by ID
-@app.get("/items/{item_id}")
-async def get_item(item_id: int):
-    if item_id not in items:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return items[item_id]
+        # Update emotions
+        emotions_update = {
+            'arousal': request.arousal,
+            'resolution': request.resolution,
+            'selection_threshold': request.selection_threshold
+        }
+        logging.info(f"Before update_emotion: {agent.emotions}")
+        agent.update_emotion(emotions_update)
+        logging.info(f"After update_emotion: {agent.emotions}")
 
-# POST new item
-@app.post("/items")
-async def create_item(item: Item):
-    item_id = len(items) + 1
-    items[item_id] = item
-    return {"item_id": item_id, "item": item}
+        # Generate response
+        result = await agent.generate_response(request.message)  # Make async if generate_response is async
 
-# GET items with query parameter
-@app.get("/search")
-async def search_items(name: Optional[str] = None, min_price: Optional[float] = None):
-    if name is None and min_price is None:
-        return items
-    
-    filtered_items = {}
-    for item_id, item in items.items():
-        if name and name.lower() not in item.name.lower():
-            continue
-        if min_price and item.price < min_price:
-            continue
-        filtered_items[item_id] = item
-    
-    return filtered_items
+        # Create response
+        response = ResponseModel(
+            username=request.username,
+            message=result,
+            competence=agent.needs['competence'],
+            certainty=agent.needs['certainty'],
+            affiliation=agent.needs['affiliation'],
+            arousal=agent.emotions['arousal'],
+            resolution=agent.emotions['resolution'],
+            selection_threshold=agent.emotions['selection_threshold'],
+        )
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
+        return response
+
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid key in agent state: {str(e)}"
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid value in request: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
